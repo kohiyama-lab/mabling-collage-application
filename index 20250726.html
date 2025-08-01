@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>WebGL Fluid Simulation</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #container {
+            display: flex;
+            flex-direction: row;
+            width: 100vw;
+            height: 100vh;
+        }
+        #draw-area {
+            flex: 4 1 0%;
+            height: 100vh;
+            background: #fff;
+            position: relative;
+        }
+        #toolbar {
+            flex: 1 1 0%;
+            height: 100vh;
+            background: #f4f4f4;
+            border-left: 2px solid #ccc;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 32px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="draw-area">
+            <canvas></canvas>
+        </div>
+        <div id="toolbar">
+            <div style="width:90%;margin-bottom:24px;">
+                <label for="colorPicker" style="font-size:1.1em;">色選択</label>
+                <input type="color" id="colorPicker" value="#ff00ff" style="width:100%;height:40px;"/>
+              </div>
+              <!-- 今後他のUI要素をここに追加 -->
+        </div>
+    </div>
+    <script src="script20250726.js"></script>
+</body>
+</html>

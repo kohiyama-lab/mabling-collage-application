@@ -52,6 +52,7 @@ googleLink.addEventListener('click', e => {
 });
 
 // Simulation section
+let mode = 'draw'; // 'fluid' に切り替えることで流体モードに
 
 const canvas = document.getElementsByTagName('canvas')[0];
 resizeCanvas();
@@ -65,38 +66,23 @@ let config = {
     PRESSURE: 0.8,
     PRESSURE_ITERATIONS: 20,
     CURL: 30,
-    SPLAT_RADIUS: 0.25,
-    SPLAT_FORCE: 6000,
+    SPLAT_RADIUS: 1.0,
+    SPLAT_FORCE: 1000,
     SHADING: true,
     COLORFUL: false,
     COLOR_UPDATE_SPEED: 10,
     PAUSED: false,
-    BACK_COLOR: { r: 0, g: 0, b: 0 },
+    BACK_COLOR: { r: 255, g: 255, b: 255 },
     TRANSPARENT: false,
-    BLOOM: true,
+    BLOOM: false,
     BLOOM_ITERATIONS: 8,
     BLOOM_RESOLUTION: 256,
     BLOOM_INTENSITY: 0.8,
     BLOOM_THRESHOLD: 0.6,
     BLOOM_SOFT_KNEE: 0.7,
-    SUNRAYS: true,
+    SUNRAYS: false,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 1.0,
-    // マーブリングモード関連の設定
-    MARBLING_MODE: false,
-    SELECTED_COLOR: { r: 255, g: 0, b: 0 }, // デフォルトは赤色
-    CURRY_PALETTE: [
-        { name: '赤', r: 255, g: 0, b: 0 },
-        { name: '青', r: 0, g: 0, b: 255 },
-        { name: '緑', r: 0, g: 255, b: 0 },
-        { name: '黄', r: 255, g: 255, b: 0 },
-        { name: '紫', r: 255, g: 0, b: 255 },
-        { name: '橙', r: 255, g: 165, b: 0 },
-        { name: 'ピンク', r: 255, g: 192, b: 203 },
-        { name: '水色', r: 0, g: 255, b: 255 },
-        { name: '白', r: 255, g: 255, b: 255 },
-        { name: '黒', r: 0, g: 0, b: 0 }
-    ]
 }
 
 function pointerPrototype () {
@@ -130,97 +116,169 @@ if (!ext.supportLinearFiltering) {
 
 startGUI();
 
-// カラーピッカーの色変更で描画色を同期
-const colorPicker = document.getElementById('colorPicker');
-if (colorPicker) {
-    // 初期値をconfig.SELECTED_COLORに合わせる
-    const toHex = (v) => v.toString(16).padStart(2, '0');
-    colorPicker.value = `#${toHex(config.SELECTED_COLOR.r)}${toHex(config.SELECTED_COLOR.g)}${toHex(config.SELECTED_COLOR.b)}`;
-    colorPicker.addEventListener('input', (e) => {
-        const hex = e.target.value;
-        config.SELECTED_COLOR = {
-            r: parseInt(hex.slice(1, 3), 16),
-            g: parseInt(hex.slice(3, 5), 16),
-            b: parseInt(hex.slice(5, 7), 16)
-        };
-    });
+function getWebGLContext (canvas) {
+    const params = { alpha: true, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
+
+    let gl = canvas.getContext('webgl2', params);
+    const isWebGL2 = !!gl;
+    if (!isWebGL2)
+        gl = canvas.getContext('webgl', params) || canvas.getContext('experimental-webgl', params);
+
+    let halfFloat;
+    let supportLinearFiltering;
+    if (isWebGL2) {
+        gl.getExtension('EXT_color_buffer_float');
+        supportLinearFiltering = gl.getExtension('OES_texture_float_linear');
+    } else {
+        halfFloat = gl.getExtension('OES_texture_half_float');
+        supportLinearFiltering = gl.getExtension('OES_texture_half_float_linear');
+    }
+
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+
+    const halfFloatTexType = isWebGL2 ? gl.HALF_FLOAT : halfFloat.HALF_FLOAT_OES;
+    let formatRGBA;
+    let formatRG;
+    let formatR;
+
+    if (isWebGL2)
+    {
+        formatRGBA = getSupportedFormat(gl, gl.RGBA16F, gl.RGBA, halfFloatTexType);
+        formatRG = getSupportedFormat(gl, gl.RG16F, gl.RG, halfFloatTexType);
+        formatR = getSupportedFormat(gl, gl.R16F, gl.RED, halfFloatTexType);
+    }
+    else
+    {
+        formatRGBA = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloatTexType);
+        formatRG = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloatTexType);
+        formatR = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloatTexType);
+    }
+
+    ga('send', 'event', isWebGL2 ? 'webgl2' : 'webgl', formatRGBA == null ? 'not supported' : 'supported');
+
+    return {
+        gl,
+        ext: {
+            formatRGBA,
+            formatRG,
+            formatR,
+            halfFloatTexType,
+            supportLinearFiltering
+        }
+    };
 }
 
-// カレーパレットUIを作成する関数
-function createCurryPaletteUI() {
-    // 既存のパレットUIがあれば削除
-    const existingPalette = document.getElementById('curryPalette');
-    if (existingPalette) {
-        existingPalette.remove();
+function getSupportedFormat (gl, internalFormat, format, type)
+{
+    if (!supportRenderTextureFormat(gl, internalFormat, format, type))
+    {
+        switch (internalFormat)
+        {
+            case gl.R16F:
+                return getSupportedFormat(gl, gl.RG16F, gl.RG, type);
+            case gl.RG16F:
+                return getSupportedFormat(gl, gl.RGBA16F, gl.RGBA, type);
+            default:
+                return null;
+        }
     }
 
-    // パレットUIを作成
-    const paletteContainer = document.createElement('div');
-    paletteContainer.id = 'curryPalette';
-    paletteContainer.style.cssText = `
-        position: fixed;
-        bottom: 10px;
-        right: 10px;
-        background: rgba(0, 0, 0, 0.8);
-        border-radius: 10px;
-        padding: 10px;
-        display: ${config.MARBLING_MODE ? 'block' : 'none'};
-        z-index: 1000;
-        max-width: 300px;
-    `;
-
-    const title = document.createElement('div');
-    title.textContent = 'カレーパレット';
-    title.style.cssText = `
-        color: white;
-        font-size: 14px;
-        margin-bottom: 10px;
-        text-align: center;
-        font-weight: bold;
-    `;
-    paletteContainer.appendChild(title);
-
-    // 色ボタンを作成
-    config.CURRY_PALETTE.forEach((color, index) => {
-        const colorButton = document.createElement('button');
-        colorButton.textContent = color.name;
-        colorButton.style.cssText = `
-            background: rgb(${color.r}, ${color.g}, ${color.b});
-            color: ${(color.r + color.g + color.b) / 3 > 128 ? 'black' : 'white'};
-            border: 2px solid ${config.SELECTED_COLOR.r === color.r && config.SELECTED_COLOR.g === color.g && config.SELECTED_COLOR.b === color.b ? 'yellow' : 'transparent'};
-            border-radius: 5px;
-            padding: 5px 10px;
-            margin: 2px;
-            cursor: pointer;
-            font-size: 12px;
-            min-width: 40px;
-        `;
-        
-        colorButton.addEventListener('click', () => {
-            config.SELECTED_COLOR = { r: color.r, g: color.g, b: color.b };
-            // 選択された色をハイライト
-            paletteContainer.querySelectorAll('button').forEach(btn => {
-                btn.style.border = '2px solid transparent';
-            });
-            colorButton.style.border = '2px solid yellow';
-        });
-        
-        paletteContainer.appendChild(colorButton);
-    });
-
-    document.body.appendChild(paletteContainer);
+    return {
+        internalFormat,
+        format
+    }
 }
 
-// マーブリングモードの切り替え関数
-function toggleMarblingMode() {
-    const palette = document.getElementById('curryPalette');
-    if (palette) {
-        palette.style.display = config.MARBLING_MODE ? 'block' : 'none';
-    }
-    
-    if (config.MARBLING_MODE) {
-        createCurryPaletteUI();
-    }
+function supportRenderTextureFormat (gl, internalFormat, format, type) {
+    let texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, 4, 4, 0, format, type, null);
+
+    let fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+
+    let status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    return status == gl.FRAMEBUFFER_COMPLETE;
+}
+
+function startGUI () {
+    var gui = new dat.GUI({ width: 300 });
+    gui.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
+    gui.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
+    gui.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion');
+    gui.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion');
+    gui.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
+    gui.add(config, 'CURL', 0, 50).name('vorticity').step(1);
+    gui.add(config, 'SPLAT_RADIUS', 0.01, 1.0).name('splat radius');
+    gui.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
+    gui.add(config, 'COLORFUL').name('colorful');
+    gui.add(config, 'PAUSED').name('paused').listen();
+
+    gui.add({ fun: () => {
+        splatStack.push(parseInt(Math.random() * 20) + 5);
+    } }, 'fun').name('Random splats');
+
+    let bloomFolder = gui.addFolder('Bloom');
+    bloomFolder.add(config, 'BLOOM').name('enabled').onFinishChange(updateKeywords);
+    bloomFolder.add(config, 'BLOOM_INTENSITY', 0.1, 2.0).name('intensity');
+    bloomFolder.add(config, 'BLOOM_THRESHOLD', 0.0, 1.0).name('threshold');
+
+    let sunraysFolder = gui.addFolder('Sunrays');
+    sunraysFolder.add(config, 'SUNRAYS').name('enabled').onFinishChange(updateKeywords);
+    sunraysFolder.add(config, 'SUNRAYS_WEIGHT', 0.3, 1.0).name('weight');
+
+    let captureFolder = gui.addFolder('Capture');
+    captureFolder.addColor(config, 'BACK_COLOR').name('background color');
+    captureFolder.add(config, 'TRANSPARENT').name('transparent');
+    captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
+
+    let github = gui.add({ fun : () => {
+        window.open('https://github.com/PavelDoGreat/WebGL-Fluid-Simulation');
+        ga('send', 'event', 'link button', 'github');
+    } }, 'fun').name('Github');
+    github.__li.className = 'cr function bigFont';
+    github.__li.style.borderLeft = '3px solid #8C8C8C';
+    let githubIcon = document.createElement('span');
+    github.domElement.parentElement.appendChild(githubIcon);
+    githubIcon.className = 'icon github';
+
+    let twitter = gui.add({ fun : () => {
+        ga('send', 'event', 'link button', 'twitter');
+        window.open('https://twitter.com/PavelDoGreat');
+    } }, 'fun').name('Twitter');
+    twitter.__li.className = 'cr function bigFont';
+    twitter.__li.style.borderLeft = '3px solid #8C8C8C';
+    let twitterIcon = document.createElement('span');
+    twitter.domElement.parentElement.appendChild(twitterIcon);
+    twitterIcon.className = 'icon twitter';
+
+    let discord = gui.add({ fun : () => {
+        ga('send', 'event', 'link button', 'discord');
+        window.open('https://discordapp.com/invite/CeqZDDE');
+    } }, 'fun').name('Discord');
+    discord.__li.className = 'cr function bigFont';
+    discord.__li.style.borderLeft = '3px solid #8C8C8C';
+    let discordIcon = document.createElement('span');
+    discord.domElement.parentElement.appendChild(discordIcon);
+    discordIcon.className = 'icon discord';
+
+    let app = gui.add({ fun : () => {
+        ga('send', 'event', 'link button', 'app');
+        window.open('http://onelink.to/5b58bn');
+    } }, 'fun').name('Check out mobile app');
+    app.__li.className = 'cr function appBigFont';
+    app.__li.style.borderLeft = '3px solid #00FF7F';
+    let appIcon = document.createElement('span');
+    app.domElement.parentElement.appendChild(appIcon);
+    appIcon.className = 'icon app';
+
+    if (isMobile())
+        gui.close();
 }
 
 function isMobile () {
@@ -855,6 +913,28 @@ const gradientSubtractShader = compileShader(gl.FRAGMENT_SHADER, `
     }
 `);
 
+const drawFragmentShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+
+    varying vec2 vUv;
+
+    uniform vec2 point;     // 描画中心 (0.0〜1.0)
+    uniform float radius;   // 半径（正規化）
+    uniform vec3 color;     // 描く色（0.0〜1.0）
+
+    void main () {
+        vec2 diff = vUv - point;
+        float dist = length(diff);
+
+        if (dist < radius) {
+            gl_FragColor = vec4(color, 1.0);  // 完全に上書き
+        } else {
+            discard;  // 半径外は何も描かない（透明のまま）
+        }
+    }
+ `);
+
+
 const blit = (() => {
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
@@ -919,6 +999,7 @@ const curlProgram            = new Program(baseVertexShader, curlShader);
 const vorticityProgram       = new Program(baseVertexShader, vorticityShader);
 const pressureProgram        = new Program(baseVertexShader, pressureShader);
 const gradienSubtractProgram = new Program(baseVertexShader, gradientSubtractShader);
+const drawProgram            = new Program(baseVertexShader, drawFragmentShader);//2025年7月8日に入れました
 
 const displayMaterial = new Material(baseVertexShader, displayShaderSource);
 
@@ -1095,7 +1176,7 @@ function createTextureAsync (url) {
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
     };
-    image.src = url;
+    //image.src = url;
 
     return obj;
 }
@@ -1110,23 +1191,46 @@ function updateKeywords () {
 
 updateKeywords();
 initFramebuffers();
-multipleSplats(parseInt(Math.random() * 20) + 5);
-
-// 初期化時にカレーパレットUIを作成
-createCurryPaletteUI();
+//multipleSplats(parseInt(Math.random() * 20) + 5);
 
 let lastUpdateTime = Date.now();
 let colorUpdateTimer = 0.0;
 update();
+
+//function update () {
+    //const dt = calcDeltaTime();
+    //if (resizeCanvas())
+        //initFramebuffers();
+    //updateColors(dt);
+    //applyInputs();
+    //if (!config.PAUSED)
+        //step(dt);
+    //render(null);
+    //requestAnimationFrame(update);
+//}
 
 function update () {
     const dt = calcDeltaTime();
     if (resizeCanvas())
         initFramebuffers();
     updateColors(dt);
-    applyInputs();
-    if (!config.PAUSED)
+
+    if (mode !== 'draw') {
+        applyInputs(); // マウス入力で色を入れるのは fluid のときだけ
+    }
+
+    if (mode === 'draw') {
+        pointers.forEach(p => {
+            if (p.down && p.moved) {
+                drawPointer(p);
+                p.moved = false;
+            }
+        });
+    }
+
+    if (mode !== 'draw' && !config.PAUSED)
         step(dt);
+
     render(null);
     requestAnimationFrame(update);
 }
@@ -1173,6 +1277,11 @@ function applyInputs () {
         }
     });
 }
+
+function drawPointer(pointer) {
+    drawLine(pointer.prevTexcoordX, pointer.prevTexcoordY, pointer.texcoordX, pointer.texcoordY, pointer.color);
+}
+
 
 function step (dt) {
     gl.disable(gl.BLEND);
@@ -1247,14 +1356,13 @@ function render (target) {
         blur(sunrays, sunraysTemp, 1);
     }
 
-    if (target == null || !config.TRANSPARENT) {
+    if ((target == null || !config.TRANSPARENT)) {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.BLEND);
-    }
-    else {
+    } else {
         gl.disable(gl.BLEND);
     }
-
+    
     if (!config.TRANSPARENT)
         drawColor(target, normalizeColor(config.BACK_COLOR));
     if (target == null && config.TRANSPARENT)
@@ -1400,6 +1508,44 @@ function splat (x, y, dx, dy, color) {
     dye.swap();
 }
 
+//20250710に追加しました。
+function drawLine(x0, y0, x1, y1, color) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.ceil(dist / 0.003); // 間隔を調整（0.001～0.01程度）
+
+    for (let i = 0; i < steps; i++) {
+        const t = i / steps;
+        const x = x0 + dx * t;
+        const y = y0 + dy * t;
+        drawToDye(x, y, color);
+    }
+}
+
+//20250701に追加しました
+//描画するための関数
+function drawToDye(x, y, color) {
+    drawProgram.bind();
+    gl.uniform2f(drawProgram.uniforms.point, x, y);
+    gl.uniform1f(drawProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+    gl.uniform3f(drawProgram.uniforms.color, color.r, color.g, color.b);
+    blit(dye.write);
+    dye.swap();
+}
+
+//function drawToDye(x, y, color) {
+    //console.log("描画中：", x, y, color); // ← この行を追加
+    //splatProgram.bind();
+    //gl.uniform1i(splatProgram.uniforms.uTarget, dye.read.attach(0));
+    //gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
+    //gl.uniform2f(splatProgram.uniforms.point, x, y);
+    //gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
+    //gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+    //blit(dye.write);
+    //dye.swap();
+//}
+
 function correctRadius (radius) {
     let aspectRatio = canvas.width / canvas.height;
     if (aspectRatio > 1)
@@ -1508,23 +1654,17 @@ function correctDeltaY (delta) {
     return delta;
 }
 
+//function generateColor () {
+    //let c = HSVtoRGB(Math.random(), 1.0, 1.0);
+    //c.r *= 0.15;
+    //c.g *= 0.15;
+    //c.b *= 0.15;
+    //return c;
+//}
 function generateColor () {
-    if (config.MARBLING_MODE) {
-        // マーブリングモードでは選択された色を使用
-        return {
-            r: config.SELECTED_COLOR.r / 255 * 0.15,
-            g: config.SELECTED_COLOR.g / 255 * 0.15,
-            b: config.SELECTED_COLOR.b / 255 * 0.15
-        };
-    } else {
-        // 通常モードではランダムな色を生成
-        let c = HSVtoRGB(Math.random(), 1.0, 1.0);
-        c.r *= 0.15;
-        c.g *= 0.15;
-        c.b *= 0.15;
-        return c;
-    }
+    return { r: 25, g: 25, b: 0 };
 }
+
 
 function HSVtoRGB (h, s, v) {
     let r, g, b, i, f, p, q, t;
@@ -1600,3 +1740,12 @@ function hashCode (s) {
     }
     return hash;
 };
+
+// モード切り替えボタンの処理
+const modeButton = document.getElementById('modeToggle');
+
+modeButton.addEventListener('click', () => {
+    mode = (mode === 'draw') ? 'fluid' : 'draw';
+    modeButton.textContent = (mode === 'draw') ? '描画モード' : '流体モード';
+    console.log('モード切り替え:', mode);
+});
