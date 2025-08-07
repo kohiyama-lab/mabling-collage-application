@@ -65,7 +65,7 @@ let config = {
     DYE_RESOLUTION: 1024,
     CAPTURE_RESOLUTION: 512,
     DENSITY_DISSIPATION: 0.02,    // 色の消失を防ぐ
-    VELOCITY_DISSIPATION: 1.0,   // 速度の減衰を調整
+    VELOCITY_DISSIPATION: 0.98,   // 速度の減衰を調整
     PRESSURE: 0.8,
     PRESSURE_ITERATIONS: 20,                                                                                          
     CURL: 2,                      // 渦を大幅に減らす
@@ -809,7 +809,8 @@ const advectionShader = compileShader(gl.FRAGMENT_SHADER, `
         vec4 result = texture2D(uSource, coord);
     #endif
         float decay = 1.0 + dissipation * dt;
-        gl_FragColor = result / decay;
+        float fade = 1.0 - (1.0 / decay);
+        gl_FragColor = mix(result, vec4(1.0), fade); // ← 白にフェード
     }`,
     ext.supportLinearFiltering ? null : ['MANUAL_FILTERING']
 );
@@ -1066,7 +1067,7 @@ const blit = (() => {
         }
         if (clear)
         {
-            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clearColor(1.0, 1.0, 1.0, 1.0);
             gl.clear(gl.COLOR_BUFFER_BIT);
         }
         // CHECK_FRAMEBUFFER_STATUS();
@@ -1664,7 +1665,8 @@ function drawLine(x0, y0, x1, y1, color) {
 function drawToDye(x, y, color) {
     drawProgram.bind();
     gl.uniform2f(drawProgram.uniforms.point, x, y);
-    gl.uniform1f(drawProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+    //gl.uniform1f(drawProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+    gl.uniform1f(drawProgram.uniforms.radius, config.SPLAT_RADIUS / 100.0);
     gl.uniform3f(drawProgram.uniforms.color, color.r, color.g, color.b);
     blit(dye.write);
     dye.swap();
@@ -1801,7 +1803,7 @@ function correctDeltaY (delta) {
     //return c;
 //}
 function generateColor () {
-    return { r: 255, g: 0, b: 0 };
+    return { r: 1, g: 0, b: 0 };
 }
 
 //function generateColor () {
